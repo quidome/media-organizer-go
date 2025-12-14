@@ -1,8 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"time"
 
+	"github.com/quidome/media-organizer-go/pkg/createdat"
 	"github.com/quidome/media-organizer-go/pkg/scan"
 	"github.com/spf13/cobra"
 )
@@ -11,7 +14,6 @@ const version = "0.1.0"
 
 type options struct {
 	verbose bool
-	dryRun  bool
 }
 
 func main() {
@@ -35,9 +37,6 @@ func newRootCmd() *cobra.Command {
 			if opts.verbose {
 				cmd.Println("Verbose mode: enabled")
 			}
-			if opts.dryRun {
-				cmd.Println("Dry run mode: enabled")
-			}
 			cmd.Println("")
 			cmd.Println("Use --help to see available commands and options")
 		},
@@ -47,7 +46,6 @@ func newRootCmd() *cobra.Command {
 	rootCmd.SetErr(os.Stderr)
 
 	rootCmd.PersistentFlags().BoolVarP(&opts.verbose, "verbose", "v", false, "enable verbose output")
-	rootCmd.PersistentFlags().BoolVarP(&opts.dryRun, "dry-run", "n", false, "perform a dry run without making changes")
 
 	rootCmd.AddCommand(newOrganizeCmd(opts))
 	rootCmd.AddCommand(newScanCmd(opts))
@@ -56,30 +54,54 @@ func newRootCmd() *cobra.Command {
 }
 
 func newOrganizeCmd(opts *options) *cobra.Command {
-	return &cobra.Command{
+	var execute bool
+
+	organizeCmd := &cobra.Command{
 		Use:   "organize [source] [destination]",
 		Short: "Organize media files from source to destination",
-		Long:  "Organize media files from a source directory to a destination directory based on their metadata (date taken, camera model, etc.)",
+		Long:  "Organize media files from a source directory to a destination directory based on their metadata.",
 		Args:  cobra.ExactArgs(2),
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			source := args[0]
-			dest := args[1]
+			_ = args[1] // destination wiring comes in later stages
 
-			cmd.Println("Organizing media files...")
-			cmd.Printf("Source: %s\n", source)
-			cmd.Printf("Destination: %s\n", dest)
+			if execute {
+				return fmt.Errorf("execute mode not implemented yet")
+			}
+
+			fsys := os.DirFS(source)
+			scanOpts := scan.DefaultOptions()
+
+			matches, err := scan.Scan(fsys, ".", scanOpts)
+			if err != nil {
+				return err
+			}
+
+			for _, match := range matches {
+				res, err := createdat.Determine(fsys, match, createdat.Options{Location: time.Local})
+				if err != nil {
+					return err
+				}
+
+				createdAt := "unknown"
+				if !res.CreatedAt.IsZero() {
+					createdAt = res.CreatedAt.Format(time.RFC3339)
+				}
+
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\n", match, createdAt, res.Source)
+			}
 
 			if opts.verbose {
-				cmd.Println("Verbose mode: enabled")
-			}
-			if opts.dryRun {
-				cmd.Println("Dry run mode: No files will be moved")
+				cmd.PrintErrf("found %d media files\n", len(matches))
 			}
 
-			cmd.Println("")
-			cmd.Println("Organization logic not yet implemented")
+			return nil
 		},
 	}
+
+	organizeCmd.Flags().BoolVarP(&execute, "execute", "x", false, "execute copy operations (default: dry-run)")
+
+	return organizeCmd
 }
 
 func newScanCmd(opts *options) *cobra.Command {

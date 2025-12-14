@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRootCommand_PrintsVersion(t *testing.T) {
@@ -60,24 +61,55 @@ func TestOrganizeCommand_RequiresTwoArgs(t *testing.T) {
 	}
 }
 
-func TestOrganizeCommand_PrintsSourceAndDestination(t *testing.T) {
+func TestOrganizeCommand_DryRunPrintsCreatedAtRecords(t *testing.T) {
+	tmp := t.TempDir()
+
+	writeFile(t, tmp, "IMG_20240102_030405.jpg")
+	writeFileWithMTime(t, tmp, "holiday.jpg", time.Date(2020, 6, 7, 8, 9, 10, 0, time.UTC))
+	writeFile(t, tmp, "sub/VID_20240102_030405.mp4")
+	writeFile(t, tmp, "ignore.txt")
+
 	cmd := newRootCmd()
 
 	out := new(bytes.Buffer)
 	cmd.SetOut(out)
 	cmd.SetErr(out)
-	cmd.SetArgs([]string{"organize", "src", "dst"})
+	cmd.SetArgs([]string{"organize", tmp, "dst"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	output := out.String()
-	if !strings.Contains(output, "Source: src") {
-		t.Fatalf("expected source line, got %q", output)
+	output := strings.TrimSpace(out.String())
+	lines := strings.Split(output, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines, got %d: %q", len(lines), output)
 	}
-	if !strings.Contains(output, "Destination: dst") {
-		t.Fatalf("expected destination line, got %q", output)
+
+	if !strings.Contains(lines[0], "IMG_20240102_030405.jpg\t") || !strings.Contains(lines[0], "\tfilename") {
+		t.Fatalf("unexpected line: %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "holiday.jpg\t") || !strings.Contains(lines[1], "\tmtime") {
+		t.Fatalf("unexpected line: %q", lines[1])
+	}
+	if !strings.Contains(lines[2], "sub/VID_20240102_030405.mp4\t") || !strings.Contains(lines[2], "\tfilename") {
+		t.Fatalf("unexpected line: %q", lines[2])
+	}
+}
+
+func TestOrganizeCommand_ExecuteNotImplemented(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, tmp, "IMG_20240102_030405.jpg")
+
+	cmd := newRootCmd()
+
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+	cmd.SetArgs([]string{"organize", tmp, "dst", "--execute"})
+
+	if err := cmd.Execute(); err == nil {
+		t.Fatalf("expected error, got nil")
 	}
 }
 
@@ -127,5 +159,20 @@ func writeFile(t *testing.T, dir string, relPath string) {
 	}
 	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
+	}
+}
+
+func writeFileWithMTime(t *testing.T, dir string, relPath string, mtime time.Time) {
+	t.Helper()
+
+	path := filepath.Join(dir, filepath.FromSlash(relPath))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatalf("chtimes: %v", err)
 	}
 }
