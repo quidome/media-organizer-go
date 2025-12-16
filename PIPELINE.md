@@ -49,36 +49,50 @@ Pipeline intent:
 - options like `maxDepth`, extension allowlists
 
 **Output**
-- stable, sorted list of **root-relative** media paths
+- stable, sorted list of **records** (root-relative paths + file stats)
+
+Record fields (current implementation)
+- `path` (root-relative, forward-slash)
+- `file_size_bytes`
+- `mod_time` (mtime)
 
 Notes
-- Extension matching should be case-insensitive.
-- Default output should contain **only media files**.
+- Extension matching is case-insensitive.
+- Default output contains **only media files**.
 
 ### Stage 2: Attribute Timestamp (CreatedAt)
 
 **Input**
-- discovered file paths (and optionally stat/metadata)
+- discovered records (paths + file stats)
 
 **Output**
 - enriched records with:
-  - `created_at` (timestamp)
-  - `created_at_source` (one of `metadata`, `filename`, `mtime`, `unknown`)
+  - `created_at` candidates (dictionary-like):
+    - `metadata` (EXIF/container metadata)
+    - `filename` (parsed from filename)
+    - `filestat` (mtime fallback)
+  - `best_created_at` (chosen using priority `metadata -> filename -> filestat`)
 
 Notes
-- Track `created_at_source` for explainability and future debugging.
+- Keep all candidates for explainability/debugging.
 - Decide timezone policy early (how to interpret timestamps without offsets).
+- On Linux, the file-stat fallback is mtime (creation time is generally not reliably available).
 
 ### Stage 3: Plan Destination (Partitioning)
 
 **Input**
-- `created_at` + original filename/path + destination root
+- `best_created_at` (or unknown)
+- original filename/path
+- destination root
 
 **Output**
 - planned operations: `src -> proposedDst`
 
-Rule
-- `proposedDst = <dest>/YYYY/MM/DD/<original_filename>`
+Rules
+- If `best_created_at` is known:
+  - `proposedDst = <dest>/YYYY/MM/DD/<original_filename>`
+- If `best_created_at` is unknown:
+  - `proposedDst = <dest>/unknown/<original_filename>`
 
 ### Stage 4: Resolve Collisions (Deterministic)
 
@@ -86,23 +100,53 @@ Rule
 - proposed destination paths
 
 **Output**
-- finalized operations with unique destination paths
+- finalized operations with unique destination paths (within the run)
 
 Rules
 - Suffix is inserted before the extension: `name_1.jpg`.
-- Collision handling should be deterministic and stable.
+- Collision handling is deterministic and stable.
+
+### Stage 4b: Deduplicate Sources (Exact Content)
+
+**Input**
+- discovered source files in the current run
+
+**Output**
+- keep exactly one file per exact-duplicate group; skip the rest
+
+Rules
+- Duplicate definition: exact duplicate content (byte-for-byte identical).
+- Canonical choice: keep the oldest `best_created_at` (unknown timestamps do not win; ties break deterministically).
+- Uses a tiered approach: size grouping -> header bytes (64KiB) -> full byte comparison.
+
+### Stage 4c: Reconcile Against Destination (Read-only)
+
+**Input**
+- planned operations for kept sources
+
+**Output**
+- final per-source decision:
+  - `copy` / `copy_renamed`
+  - `skipped_identical`
+  - `skipped_duplicate_source`
+
+Rules
+- If a destination candidate exists and is identical, skip.
+- If it exists and differs, choose next suffix path.
 
 ### Stage 5: Materialize (Copy)
 
 **Input**
-- finalized operations
+- finalized operations/decisions from planning + reconcile stages
 
 **Output**
 - copy results + summary report
 
 Notes
 - Keep all filesystem mutation here.
-- This stage should support `--dry-run` by skipping writes and only printing the plan.
+- Never overwrite existing files.
+- In execute mode, only perform `copy` / `copy_renamed` actions.
+- In dry-run mode, print the planned decisions and destinations.
 
 ## Planning vs Execution
 
@@ -118,9 +162,13 @@ This enables:
 ## Suggested Outputs
 
 - Default human-friendly mode:
-  - prints planned/copied paths, one per line
+  - prints planned/copied/skipped paths, one per line
 - Optional machine-friendly mode:
-  - `--json` / `--ndjson` for piping and reproducible automation
+  - `--json` for piping and reproducible automation
+
+Current CLI behavior
+- `scan --json`: emits inventory + `created_at` candidates (no destination, no dedupe).
+- `organize --json`: emits inventory + `created_at` candidates + destination/decision fields.
 
 ## Testing Strategy
 

@@ -31,6 +31,21 @@ type Result struct {
 	Source    Source
 }
 
+// DetailedResult contains all considered timestamps from different sources.
+type DetailedResult struct {
+	// Best is the chosen timestamp using priority: metadata > filename > mtime
+	Best Result
+
+	// Metadata is the timestamp extracted from embedded metadata (EXIF, etc.)
+	Metadata time.Time
+
+	// Filename is the timestamp parsed from the filename
+	Filename time.Time
+
+	// Filestat is the mtime from filesystem metadata
+	Filestat time.Time
+}
+
 // MetadataExtractor extracts an embedded creation timestamp from a media stream.
 //
 // Implementations should return (t, true, nil) when a timestamp is found.
@@ -54,16 +69,28 @@ type Options struct {
 
 // Determine returns the best-effort created-at timestamp for a path.
 func Determine(fsys fs.FS, path string, opts Options) (Result, error) {
+	detailed, err := DetermineDetailed(fsys, path, opts)
+	if err != nil {
+		return Result{}, err
+	}
+	return detailed.Best, nil
+}
+
+// DetermineDetailed returns all considered timestamps for a path.
+func DetermineDetailed(fsys fs.FS, path string, opts Options) (DetailedResult, error) {
 	path = filepath.Clean(path)
 
 	info, err := fs.Stat(fsys, path)
 	if err != nil {
-		return Result{}, err
+		return DetailedResult{}, err
 	}
 	if info.IsDir() {
-		return Result{}, fs.ErrInvalid
+		return DetailedResult{}, fs.ErrInvalid
 	}
 
+	var result DetailedResult
+
+	// Try metadata
 	metadata := opts.Metadata
 	if metadata == nil {
 		metadata = exifExtractor{}
@@ -72,31 +99,42 @@ func Determine(fsys fs.FS, path string, opts Options) (Result, error) {
 	if metadata != nil {
 		f, openErr := fsys.Open(path)
 		if openErr != nil {
-			return Result{}, openErr
+			return DetailedResult{}, openErr
 		}
 		createdAt, ok, metaErr := metadata.CreatedAt(path, f)
 		_ = f.Close()
 		if metaErr == nil && ok {
-			return Result{CreatedAt: createdAt, Source: SourceMetadata}, nil
+			result.Metadata = createdAt
 		}
-		// best-effort: ignore metaErr and fall through
 	}
 
+	// Try filename
 	loc := opts.Location
 	if loc == nil {
 		loc = time.Local
 	}
-
 	if createdAt, ok := parseFromFilename(filepath.Base(path), loc); ok {
-		return Result{CreatedAt: createdAt, Source: SourceFilename}, nil
+		result.Filename = createdAt
 	}
 
+	// Get mtime
 	mtime := info.ModTime()
 	if !mtime.IsZero() {
-		return Result{CreatedAt: mtime, Source: SourceMtime}, nil
+		result.Filestat = mtime
 	}
 
-	return Result{CreatedAt: time.Time{}, Source: SourceUnknown}, nil
+	// Determine best according to priority
+	if !result.Metadata.IsZero() {
+		result.Best = Result{CreatedAt: result.Metadata, Source: SourceMetadata}
+	} else if !result.Filename.IsZero() {
+		result.Best = Result{CreatedAt: result.Filename, Source: SourceFilename}
+	} else if !result.Filestat.IsZero() {
+		result.Best = Result{CreatedAt: result.Filestat, Source: SourceMtime}
+	} else {
+		result.Best = Result{CreatedAt: time.Time{}, Source: SourceUnknown}
+	}
+
+	return result, nil
 }
 
 var (
