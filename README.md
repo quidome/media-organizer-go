@@ -1,3 +1,5 @@
+> **Disclaimer:** This repository is an AI-generated exercise for educational purposes. It may contain bugs or incomplete features. Use at your own risk.
+
 # media-organizer-go
 
 A command-line tool written in Go to organize media files (photos and videos) into a structured library based on their creation dates.
