@@ -40,3 +40,10 @@ clean:
 deps:
 	go mod download
 	go mod tidy
+
+# Pre-commit checks: format, test, and lint
+pre-commit:
+	gofmt -s -w .
+	goimports -w .
+	go vet ./...
+	go test ./...
