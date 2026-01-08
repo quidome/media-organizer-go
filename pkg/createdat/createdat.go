@@ -93,7 +93,10 @@ func DetermineDetailed(fsys fs.FS, path string, opts Options) (DetailedResult, e
 	// Try metadata
 	metadata := opts.Metadata
 	if metadata == nil {
-		metadata = exifExtractor{}
+		metadata = &compositeExtractor{
+			imageExtractor: exifExtractor{},
+			videoExtractor: videoExtractor{},
+		}
 	}
 
 	if metadata != nil {

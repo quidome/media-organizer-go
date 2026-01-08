@@ -47,3 +47,7 @@ pre-commit:
 	goimports -w .
 	go vet ./...
 	go test ./...
+
+# Install the binary to ~/go/bin (requires ~/go/bin in PATH)
+install:
+	go install ./cmd/media-organizer
